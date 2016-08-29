@@ -103,6 +103,18 @@ function precacheChildNodes(inst, node) {
   inst._flags |= Flags.hasCachedChildNodes;
 }
 
+function findParent(inst) {
+  // TODO: It may be a good idea to cache this to prevent unnecessary DOM
+  // traversal, but caching is difficult to do correctly without using a
+  // mutation observer to listen for all DOM changes.
+  while (inst._hostParent) {
+    inst = inst._hostParent;
+  }
+  var rootNode = ReactDOMComponentTree.getNodeFromInstance(inst);
+  var container = rootNode.parentNode;
+  return ReactDOMComponentTree.getClosestInstanceFromNode(container);
+}
+
 /**
  * Given a DOM node, return the closest ReactDOMComponent or
  * ReactDOMTextComponent instance ancestor.
@@ -135,6 +147,27 @@ function getClosestInstanceFromNode(node) {
   }
 
   return closest;
+}
+
+function getClosestInstanceInTreeFromNode(node, targetTree) {
+  if(!node || !targetTree) { return null; }
+
+  var inst = getClosestInstanceFromNode(node);
+
+  if(!inst) { return null; }
+
+  do {
+    var target = inst;
+
+    inst = ReactDOMTreeTraversal.getLowestCommonAncestor(target, targetTree);
+    if(inst) {
+      return target;
+    } else {
+      inst = findParent(target);
+    }
+  } while (inst);
+
+  return null;
 }
 
 /**
@@ -187,7 +220,9 @@ function getNodeFromInstance(inst) {
 }
 
 var ReactDOMComponentTree = {
+  findParent: findParent,
   getClosestInstanceFromNode: getClosestInstanceFromNode,
+  getClosestInstanceInTreeFromNode: getClosestInstanceInTreeFromNode,
   getInstanceFromNode: getInstanceFromNode,
   getNodeFromInstance: getNodeFromInstance,
   precacheChildNodes: precacheChildNodes,

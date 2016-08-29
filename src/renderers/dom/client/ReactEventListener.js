@@ -20,34 +20,39 @@ var ReactUpdates = require('ReactUpdates');
 var getEventTarget = require('getEventTarget');
 var getUnboundedScrollPosition = require('getUnboundedScrollPosition');
 
-/**
- * Find the deepest React component completely containing the root of the
- * passed-in instance (for use when entire React trees are nested within each
- * other). If React trees are not nested, returns null.
- */
-function findParent(inst) {
-  // TODO: It may be a good idea to cache this to prevent unnecessary DOM
-  // traversal, but caching is difficult to do correctly without using a
-  // mutation observer to listen for all DOM changes.
-  while (inst._hostParent) {
-    inst = inst._hostParent;
-  }
-  var rootNode = ReactDOMComponentTree.getNodeFromInstance(inst);
-  var container = rootNode.parentNode;
-  return ReactDOMComponentTree.getClosestInstanceFromNode(container);
+// Used to store metadata about DOM events
+function DOMEventMetadata(isRelatedTarget) {
+  this.isRelatedTarget = isRelatedTarget;
 }
+Object.assign(DOMEventMetadata.prototype, {
+  destructor: function() {
+    this.isRelatedTarget = null;
+  },
+});
+PooledClass.addPoolingTo(DOMEventMetadata);
 
 // Used to store ancestor hierarchy in top level callback
 function TopLevelCallbackBookKeeping(topLevelType, nativeEvent) {
   this.topLevelType = topLevelType;
   this.nativeEvent = nativeEvent;
   this.ancestors = [];
+  this.ancestorMetadata = [];
+  this.relatedAncestors = [];
+  this.roots = [];
+  this.relatedRoots = [];
 }
 Object.assign(TopLevelCallbackBookKeeping.prototype, {
   destructor: function() {
     this.topLevelType = null;
     this.nativeEvent = null;
     this.ancestors.length = 0;
+    for(let i=0; i<this.ancestorMetadata.length; i++) {
+      DOMEventMetadata.release(this.ancestorMetadata[i]);
+    }
+    this.roots.length = 0;
+    this.relatedRoots.length = 0;
+    this.ancestorMetadata.length = 0;
+    this.relatedAncestors.length = 0;
   },
 });
 PooledClass.addPoolingTo(
@@ -55,29 +60,75 @@ PooledClass.addPoolingTo(
   PooledClass.twoArgumentPooler
 );
 
-function handleTopLevelImpl(bookKeeping) {
-  var nativeEventTarget = getEventTarget(bookKeeping.nativeEvent);
-  var targetInst = ReactDOMComponentTree.getClosestInstanceFromNode(
-    nativeEventTarget
-  );
-
+function _collectAncestors(ancestors, roots, targetInst) {
   // Loop through the hierarchy, in case there's any nested components.
   // It's important that we build the array of ancestors before calling any
   // event handlers, because event handlers can modify the DOM, leading to
   // inconsistencies with ReactMount's node cache. See #1105.
+  if(!targetInst) { return; }
+
   var ancestor = targetInst;
   do {
-    bookKeeping.ancestors.push(ancestor);
-    ancestor = ancestor && findParent(ancestor);
+    ancestors.push(ancestor);
+    while (ancestor._hostParent) {
+      ancestor = ancestor._hostParent;
+    }
+    var rootNode = ReactDOMComponentTree.getNodeFromInstance(ancestor);
+    roots.push(rootNode);
+    var container = rootNode.parentNode;
+    ancestor = ReactDOMComponentTree.getClosestInstanceFromNode(container);
   } while (ancestor);
+}
 
-  for (var i = 0; i < bookKeeping.ancestors.length; i++) {
+function handleTopLevelImpl(bookKeeping) {
+  // TODO There is another bug here. There may be two targets.
+  // If nativeEventTarget is not in a react root, but relatedTarget is,
+  // EnterLeaveEventPlugin will fail to trigger enter in a root containing
+  // a nested root.
+  var nativeEventTarget = getEventTarget(bookKeeping.nativeEvent);
+
+  var targetInst = ReactDOMComponentTree.getClosestInstanceFromNode(
+    nativeEventTarget
+  );
+
+  _collectAncestors(bookKeeping.ancestors, bookKeeping.roots, targetInst);
+
+  for(let i=0; i < bookKeeping.ancestors.length; i++) {
+    bookKeeping.ancestorMetadata[i] = DOMEventMetadata.getPooled(false);
+  }
+
+  if(bookKeeping.nativeEvent.relatedTarget) {
+    let relatedTargetInst = ReactDOMComponentTree.getClosestInstanceFromNode(
+        bookKeeping.nativeEvent.relatedTarget
+    );
+
+    _collectAncestors(
+      bookKeeping.relatedAncestors,
+      bookKeeping.relatedRoots,
+      relatedTargetInst);
+
+    for(let i = -1; i < bookKeeping.relatedAncestors.length - 1; i++) {
+      let root = bookKeeping.roots[bookKeeping.roots.length - i];
+      let relatedRoot =
+        bookKeeping.relatedRoots[bookKeeping.relatedRoots.length - i];
+
+      if(!root || root !== relatedRoot) {
+        bookKeeping.ancestorMetadata[bookKeeping.ancestors.length] =
+          DOMEventMetadata.getPooled(true);
+        bookKeeping.ancestors.push(
+          bookKeeping.relatedAncestors[bookKeeping.relatedAncestors.length - i]);
+      }
+    }
+  }
+
+  for (let i = 0; i < bookKeeping.ancestors.length; i++) {
     targetInst = bookKeeping.ancestors[i];
     ReactEventListener._handleTopLevel(
       bookKeeping.topLevelType,
       targetInst,
       bookKeeping.nativeEvent,
-      getEventTarget(bookKeeping.nativeEvent)
+      getEventTarget(bookKeeping.nativeEvent),
+      bookKeeping.ancestorMetadata[i],
     );
   }
 }

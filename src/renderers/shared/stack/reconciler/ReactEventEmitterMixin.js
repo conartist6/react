@@ -28,12 +28,14 @@ var ReactEventEmitterMixin = {
       topLevelType,
       targetInst,
       nativeEvent,
-      nativeEventTarget) {
+      nativeEventTarget,
+      metadata) {
     var events = EventPluginHub.extractEvents(
       topLevelType,
       targetInst,
       nativeEvent,
-      nativeEventTarget
+      nativeEventTarget,
+      metadata
     );
     runEventQueueInBatch(events);
   },

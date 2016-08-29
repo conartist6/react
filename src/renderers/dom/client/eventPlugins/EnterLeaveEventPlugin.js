@@ -52,7 +52,8 @@ var EnterLeaveEventPlugin = {
     topLevelType,
     targetInst,
     nativeEvent,
-    nativeEventTarget
+    nativeEventTarget,
+    metadata
   ) {
     if (topLevelType === topLevelTypes.topMouseOver &&
         (nativeEvent.relatedTarget || nativeEvent.fromElement)) {
@@ -81,10 +82,33 @@ var EnterLeaveEventPlugin = {
     var from;
     var to;
     if (topLevelType === topLevelTypes.topMouseOut) {
-      from = targetInst;
-      var related = nativeEvent.relatedTarget || nativeEvent.toElement;
-      to = related ?
-        ReactDOMComponentTree.getClosestInstanceFromNode(related) : null;
+      let related, relatedTargetInst;
+
+      //console.log('related?', metadata.isRelatedTarget);
+
+      if(metadata.isRelatedTarget) {
+        related = nativeEventTarget;
+      } else {
+        related = nativeEvent.relatedTarget || nativeEvent.toElement;
+      }
+
+      if (related) {
+        if (targetInst) {
+          relatedTargetInst = ReactDOMComponentTree.getClosestInstanceInTreeFromNode(related, targetInst);
+        } else {
+          relatedTargetInst = ReactDOMComponentTree.getClosestInstanceFromNode(related);
+        }
+      } else {
+        relatedTargetInst = null;
+      }
+
+      if(metadata.isRelatedTarget) {
+        from = relatedTargetInst;
+        to = targetInst;
+      } else {
+        to = relatedTargetInst;
+        from = targetInst;
+      }
     } else {
       // Moving to a node from outside the window.
       from = null;
